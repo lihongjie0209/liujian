@@ -1,0 +1,5 @@
+{
+  "scripts": [
+    { "name": "format-api", "file": "format-api.js", "phases": ["request", "response"], "timeout_ms": 2000 }
+  ]
+}

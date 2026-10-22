@@ -1,0 +1,13 @@
+/ca-proxy
+/liujian
+/liujian.exe
+/dist/
+*.jsonl
+*.body
+*.har
+*.db
+*.db-shm
+*.db-wal
+*.crt
+*.key
+ca.pem

@@ -1,0 +1,50 @@
+version: 2
+
+project_name: liujian
+
+builds:
+  - id: liujian
+    main: ./cmd/liujian
+    binary: liujian
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -buildid=
+
+archives:
+  - id: binaries
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}"
+    files:
+      - README.md
+      - LICENSE
+      - examples/*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
+  sort: asc
