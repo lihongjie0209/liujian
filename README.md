@@ -1,6 +1,6 @@
 # 流鉴（liujian）
 
-Go 命令行抓包工具，支持手机只修改 DNS 后抓取常见 HTTP/HTTPS 流量，也支持显式 HTTP 代理。终端中可查看实时会话、历史请求和 WebSocket 文本/二进制消息，并导出 HAR 1.2。
+Go 命令行抓包工具，支持手机只修改 DNS 后抓取常见 HTTP/HTTPS 流量，也支持智能端口上的显式 HTTP 和 SOCKS5 代理。终端中可查看实时会话、历史请求和 WebSocket 文本/二进制消息，并导出 HAR 1.2。
 
 ## 下载与运行
 
@@ -24,7 +24,7 @@ go build -o liujian ./cmd/liujian
 ```
 
 
-默认在所有 IPv4 网卡（`0.0.0.0`）监听 DNS UDP/TCP 53、HTTP 80、HTTPS 443 和显式 HTTP 代理 8080。DNS 按请求来源 IP 匹配本机接口网段，返回同网段的监听地址；重叠网段取最具体的匹配。TUI 会列出本机局域网地址；手机 DNS 需要设置为其中一个可达地址，不能填写 `0.0.0.0`。如需只监听一个地址，可显式设置 `--listen-ip 192.168.1.20`。确保本机防火墙允许手机访问这些端口。`--upstream-dns` 可省略，此时读取 系统 DNS 解析配置中的上游服务器；它不能指向抓包机自身。
+默认在所有 IPv4 网卡（`0.0.0.0`）监听 DNS UDP/TCP 53、HTTP 80、HTTPS 443 和 HTTP/SOCKS5 智能代理 8080。DNS 按请求来源 IP 匹配本机接口网段，返回同网段的监听地址；重叠网段取最具体的匹配。TUI 会列出本机局域网地址；手机 DNS 需要设置为其中一个可达地址，不能填写 `0.0.0.0`。如需只监听一个地址，可显式设置 `--listen-ip 192.168.1.20`。确保本机防火墙允许手机访问这些端口。`--upstream-dns` 可省略，此时读取系统 DNS 解析配置中的上游服务器；它不能指向抓包机自身。
 
 如果 DNS 客户端来自其他网段（例如经过路由或 DNS 转发器），需显式指定响应地址。规则按客户端 CIDR 匹配，右侧 IP 必须是抓包机本地接口上的地址，且能从该客户端网络访问。显式规则优先于自动匹配，重叠规则取最具体的一条；无法匹配时返回 SERVFAIL，不会返回 `0.0.0.0`：
 
@@ -41,7 +41,7 @@ go build -o liujian ./cmd/liujian
   --exclude '*.skip.example'
 ```
 
-额外端口需要标明是 HTTP 还是 HTTPS，并且不能与 DNS、显式代理或其他监听端口重复。会话仍按请求中的原始域名和端口连接上游。要修改默认端口，可使用 `--http-port`、`--https-port`；`--dns-port`、`--proxy-port` 主要用于测试或受限环境。手机仅改 DNS 的实际使用仍需让其请求到对应的监听端口。
+额外端口需要标明是 HTTP 还是 HTTPS，并且不能与 DNS、智能代理或其他监听端口重复。会话仍按请求中的原始域名和端口连接上游。要修改默认端口，可使用 `--http-port`、`--https-port`；`--dns-port` 主要用于测试或受限环境，`--proxy-port` 可调整智能代理端口。手机仅改 DNS 的实际使用仍需让其请求到对应的监听端口。
 
 只抓指定目标时，可重复使用 `--allow-host`，填写完整域名、子域名通配符、目标 IP 或 CIDR；`--allow-client` 可限制手机等客户端的 IP 或 CIDR。两类条件同时设置时必须同时命中。未命中的 DNS 查询会交给上游，显式代理请求则直接转发且不保存会话。未设置白名单时仍抓取所有可处理的目标。
 
@@ -76,9 +76,21 @@ go build -o liujian ./cmd/liujian
 
 导入的 CA 默认保存在 `~/.local/share/ca-proxy/ca.pem`（沿用旧版数据目录，以保留已有证书和会话），并优先于内置默认 CA；显式传入 `--ca-profile` 时则使用指定的内置 CA。要清除本地 CA 覆盖，可移走该 `ca.pem`。会话默认保存在同一数据目录；可用 `--data-dir` 更改。上游 HTTPS 证书会正常校验。
 
+## 智能代理端口
+
+`--proxy-port` 默认是 `8080`，同一端口会自动识别 HTTP 代理与 SOCKS5，无须分别配置。可直接把浏览器或系统代理设置为 `抓包机IP:8080`，协议选择 HTTP 或 SOCKS5；SOCKS5 使用免认证模式，并允许局域网或本机客户端连接。当前支持 SOCKS5 TCP CONNECT；BIND 与 UDP ASSOCIATE 返回不支持。
+
+SOCKS5 的 HTTP、HTTPS 请求沿用 CA 动态证书、白名单、脚本、TUI 和存储流程；其他 TCP 协议只转发，不解析正文。浏览器使用 SOCKS5 时建议启用由代理端解析域名，以保留域名供证书签发和会话展示。客户端如果使用证书绑定或拒绝测试 CA，HTTPS 仍可能无法解密。
+
+```sh
+./liujian run --proxy-port 8080
+curl --proxy http://127.0.0.1:8080 http://example.com/
+curl --proxy socks5h://127.0.0.1:8080 http://example.com/
+```
+
 ## 查看和导出
 
-实时 TUI 顶部显示当前 DNS、HTTP、HTTPS、显式代理监听端口，以及手机 DNS 和 CA 证书安装指引。默认监听所有 IPv4 网卡时，顶部会列出可供手机使用的局域网地址及 DNS 响应规则。启动时会检查防火墙状态，此后每 15 秒刷新一次；Windows 下检查当前程序的入站允许或阻止规则，未找到允许规则时提示手机访问尚未验证。此检查不能代替从手机实际连接测试。TLS 握手失败会显示为列表中的失败记录，Enter 可查看 SNI、客户端地址、错误原因和合并次数；同一错误每 10 秒最多新增一行，顶部也有总次数，不会逐条刷屏。其他服务错误写入数据目录下的 `ca-proxy.log`。手机常规 DNS 设置使用 53 端口；如果启动参数为其他 DNS 端口，TUI 会提示改为 `--dns-port 53`。监听地址为本机回环地址时，也会提示改用局域网 IPv4 地址。
+实时 TUI 顶部显示当前 DNS、HTTP、HTTPS、HTTP/SOCKS5 智能代理监听端口，以及手机 DNS 和 CA 证书安装指引。默认监听所有 IPv4 网卡时，顶部会列出可供手机使用的局域网地址及 DNS 响应规则。启动时会检查防火墙状态，此后每 15 秒刷新一次；Windows 下检查当前程序的入站允许或阻止规则，未找到允许规则时提示手机访问尚未验证。此检查不能代替从手机实际连接测试。TLS 握手失败会显示为列表中的失败记录，Enter 可查看 SNI、客户端地址、错误原因和合并次数；同一错误每 10 秒最多新增一行，顶部也有总次数，不会逐条刷屏。其他服务错误写入数据目录下的 `ca-proxy.log`。手机常规 DNS 设置使用 53 端口；如果启动参数为其他 DNS 端口，TUI 会提示改为 `--dns-port 53`。监听地址为本机回环地址时，也会提示改用局域网 IPv4 地址。
 
 列表按 Chrome Network 风格展示 Name、Status、Type、Initiator、Size、Time、Waterfall；状态码按成功、跳转、失败着色。左右方向键切换 All、Fetch/XHR、Doc、CSS、JS、Img、Media、Font、WS、SSE、Manifest、Wasm、TLS、Other 类型，`0` 返回 All。上下方向键选择请求，Enter 打开详情。详情中用 Tab 切换 Headers、Payload、Preview、Response、Cookies、Timing；SSE/WS 请求还有 Messages 标签，可以选中消息并按 Enter 查看正文；执行过脚本的会话还有 Scripts 标签，显示每个脚本的格式化输出、控制台日志与错误。JSON/HTML 会格式化并高亮。Esc 返回上一级；列表中按 `/` 输入筛选条件，多项条件用空格连接，例如 `url:/api proto:https method:GET status:200 client:192.168.1.50 resp:token`。`req:` 和 `resp:` 分别搜索请求和响应的 URL/状态、头、正文；普通文本搜索这些内容及错误。gzip 压缩正文也会解压后索引；其他未知压缩格式和加密正文需要脚本先转换成可读文本。`proto:` 支持 `http`、`https`、`ws`、`wss`、`websocket`、`sse`、`h2`、`http1`。PageUp/PageDown 滚动详情，`q` 退出。退出后可重新打开历史或导出：
 

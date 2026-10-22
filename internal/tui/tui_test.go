@@ -183,7 +183,7 @@ func TestListenerGuide(t *testing.T) {
 		{
 			name:      "LAN defaults and extra ports",
 			listeners: Listeners{IP: "192.168.1.20", DNSPort: 53, HTTPPorts: []int{80, 8081}, HTTPSPorts: []int{443, 9443}, ProxyPort: 8080},
-			want:      []string{"DNS UDP/TCP 192.168.1.20:53", "HTTP :80, :8081", "HTTPS :443, :9443", "Proxy 192.168.1.20:8080", "set phone DNS to 192.168.1.20", "http://ca-proxy.test/ca.crt"},
+			want:      []string{"DNS UDP/TCP 192.168.1.20:53", "HTTP :80, :8081", "HTTPS :443, :9443", "HTTP/SOCKS5 proxy 192.168.1.20:8080", "set phone DNS to 192.168.1.20", "http://ca-proxy.test/ca.crt"},
 		},
 		{
 			name:      "all interfaces",

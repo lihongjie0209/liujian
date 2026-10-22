@@ -19,12 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lihongjie0209/liujian/internal/allowlist"
 	"github.com/lihongjie0209/liujian/internal/ca"
 	"github.com/lihongjie0209/liujian/internal/scripts"
 	"github.com/lihongjie0209/liujian/internal/store"
-	"github.com/gorilla/websocket"
 	"github.com/miekg/dns"
+	"golang.org/x/net/proxy"
 )
 
 func TestScriptedHTTPRequestAndResponse(t *testing.T) {
@@ -291,6 +292,70 @@ func TestCaptureEntrypoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkBody(t, resp, "upstream /explicit")
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socksClient := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+		return socksDialer.Dial(network, addr)
+	}}}
+	resp, err = socksClient.Get(upstream.URL + "/socks-http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkBody(t, resp, "upstream /socks-http")
+	socksRows, err := db.List(10, "/socks-http")
+	if err != nil || len(socksRows) != 1 {
+		t.Fatalf("SOCKS5 HTTP session: %+v, %v", socksRows, err)
+	}
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		peer, acceptErr := echo.Accept()
+		if acceptErr == nil {
+			defer peer.Close()
+			_, _ = io.Copy(peer, peer)
+		}
+	}()
+	raw, err := socksDialer.Dial("tcp", echo.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.SetDeadline(time.Now().Add(3 * time.Second))
+	message := []byte{0, 1, 2, 3}
+	if _, err = raw.Write(message); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(message))
+	if _, err = io.ReadFull(raw, got); err != nil || !bytes.Equal(got, message) {
+		t.Fatalf("SOCKS5 raw TCP: %v, %v", got, err)
+	}
+	_ = raw.Close()
+	greeting, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer greeting.Close()
+	go func() {
+		peer, acceptErr := greeting.Accept()
+		if acceptErr == nil {
+			defer peer.Close()
+			_, _ = peer.Write([]byte("server first"))
+		}
+	}()
+	raw, err = socksDialer.Dial("tcp", greeting.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.SetReadDeadline(time.Now().Add(3 * time.Second))
+	serverFirst := make([]byte, len("server first"))
+	if _, err = io.ReadFull(raw, serverFirst); err != nil || string(serverFirst) != "server first" {
+		t.Fatalf("SOCKS5 server-first TCP: %q, %v", serverFirst, err)
+	}
+	_ = raw.Close()
 	clientDeadline := time.Now().Add(2 * time.Second)
 	for {
 		rows, listErr := db.List(10, "/explicit")
@@ -397,6 +462,18 @@ func TestCaptureEntrypoints(t *testing.T) {
 		t.Fatalf("explicit HTTPS negotiated %s, want HTTP/2", resp.Proto)
 	}
 	checkBody(t, resp, "secure")
+	socksSecureClient := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+		return socksDialer.Dial(network, addr)
+	}, TLSClientConfig: &tls.Config{RootCAs: rootPool}, ForceAttemptHTTP2: true}}
+	resp, err = socksSecureClient.Get(secureURL + "/socks-https")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkBody(t, resp, "secure")
+	socksRows, err = db.List(10, "/socks-https")
+	if err != nil || len(socksRows) != 1 {
+		t.Fatalf("SOCKS5 HTTPS session: %+v, %v", socksRows, err)
+	}
 	untrusted := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "should not pass") }))
 	defer untrusted.Close()
 	badResp, err := secureClient.Get(untrusted.URL)

@@ -21,13 +21,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lihongjie0209/liujian/internal/allowlist"
 	"github.com/lihongjie0209/liujian/internal/ca"
 	"github.com/lihongjie0209/liujian/internal/dnsserver"
 	"github.com/lihongjie0209/liujian/internal/netutil"
 	"github.com/lihongjie0209/liujian/internal/scripts"
 	"github.com/lihongjie0209/liujian/internal/store"
-	"github.com/gorilla/websocket"
+	"github.com/soheilhy/cmux"
 	sse "github.com/tmaxmax/go-sse"
 	"golang.org/x/net/http2"
 )
@@ -171,9 +172,31 @@ func (s *Server) Run(ctx context.Context) error {
 		return fmt.Errorf("DNS listener: %w", err)
 	}
 	defer dnsSrv.Shutdown()
-	errCh := make(chan error, len(ports))
+	errCh := make(chan error, len(ports)*3)
 	for _, p := range ports {
 		p := p
+		if p.scheme == "proxy" {
+			mux := cmux.New(p.listener)
+			mux.SetReadTimeout(10 * time.Second)
+			socksListener := mux.Match(cmux.PrefixMatcher("\x05"))
+			httpListener := mux.Match(cmux.Any())
+			go func() {
+				if e := p.server.Serve(httpListener); e != nil && !errors.Is(e, http.ErrServerClosed) && !errors.Is(e, net.ErrClosed) {
+					errCh <- e
+				}
+			}()
+			go func() {
+				if e := s.serveSOCKS(socksListener); e != nil && !errors.Is(e, net.ErrClosed) {
+					errCh <- e
+				}
+			}()
+			go func() {
+				if e := mux.Serve(); e != nil && !errors.Is(e, net.ErrClosed) && ctx.Err() == nil {
+					errCh <- e
+				}
+			}()
+			continue
+		}
 		go func() {
 			var e error
 			if p.scheme == "https" {
@@ -187,7 +210,7 @@ func (s *Server) Run(ctx context.Context) error {
 		}()
 	}
 	if s.Log != nil {
-		s.Log.Info("capture listening", "ip", ip, "dns", c.DNSPort, "http", append([]int{c.HTTPPort}, c.HTTPExtraPorts...), "https", append([]int{c.HTTPSPort}, c.HTTPSExtraPorts...), "proxy", c.ProxyPort)
+		s.Log.Info("capture listening", "ip", ip, "dns", c.DNSPort, "http", append([]int{c.HTTPPort}, c.HTTPExtraPorts...), "https", append([]int{c.HTTPSPort}, c.HTTPSExtraPorts...), "http_socks5_proxy", c.ProxyPort)
 	}
 	var runErr error
 	select {
@@ -199,6 +222,7 @@ func (s *Server) Run(ctx context.Context) error {
 	stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, p := range ports {
+		_ = p.listener.Close()
 		_ = p.server.Shutdown(stop)
 	}
 	return runErr
@@ -264,9 +288,13 @@ func (s *Server) serveConnect(w http.ResponseWriter, r *http.Request) {
 	if _, err = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
-	wrapped := &bufferedConn{Conn: conn, reader: rw.Reader}
+	s.serveInterceptTunnel(conn, rw.Reader, host, authority)
+}
+
+func (s *Server) serveInterceptTunnel(conn net.Conn, reader *bufio.Reader, host, authority string) {
+	wrapped := &bufferedConn{Conn: conn, reader: reader}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	first, err := rw.Reader.Peek(1)
+	first, err := reader.Peek(1)
 	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return

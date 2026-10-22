@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lihongjie0209/liujian/internal/store"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lihongjie0209/liujian/internal/store"
 )
 
 const (
@@ -188,7 +188,7 @@ func (m model) listenerGuide(width int) []string {
 	l := m.listeners
 	address := net.JoinHostPort(l.IP, strconv.Itoa(l.DNSPort))
 	lines := []string{
-		"Listening  DNS UDP/TCP " + address + "  |  Proxy " + net.JoinHostPort(l.IP, strconv.Itoa(l.ProxyPort)),
+		"Listening  DNS UDP/TCP " + address + "  |  HTTP/SOCKS5 proxy " + net.JoinHostPort(l.IP, strconv.Itoa(l.ProxyPort)),
 		"           HTTP " + portLabels(l.HTTPPorts) + "  |  HTTPS " + portLabels(l.HTTPSPorts),
 	}
 	ip := net.ParseIP(l.IP)

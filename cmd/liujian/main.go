@@ -257,7 +257,7 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 	cmd.Flags().IntVar(&httpsPort, "https-port", 443, "transparent HTTPS port")
 	cmd.Flags().IntSliceVar(&httpExtraPorts, "http-extra-ports", nil, "additional DNS-mode HTTP ports (comma-separated or repeatable)")
 	cmd.Flags().IntSliceVar(&httpsExtraPorts, "https-extra-ports", nil, "additional DNS-mode HTTPS ports (comma-separated or repeatable)")
-	cmd.Flags().IntVar(&proxyPort, "proxy-port", 8080, "explicit HTTP proxy port")
+	cmd.Flags().IntVar(&proxyPort, "proxy-port", 8080, "smart HTTP and SOCKS5 proxy port")
 	cmd.Flags().Int64Var(&bodyMB, "body-mb", 10, "maximum stored bytes per request or response body (MiB)")
 	cmd.Flags().Int64Var(&frameMB, "frame-mb", 1, "maximum stored bytes per WebSocket message (MiB)")
 	cmd.Flags().Int64Var(&diskMB, "disk-mb", 1024, "maximum stored session payload size (MiB)")

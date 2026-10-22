@@ -11,7 +11,9 @@ require (
 	github.com/emmansun/gmsm v0.44.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/miekg/dns v1.1.65
+	github.com/soheilhy/cmux v0.1.5
 	github.com/spf13/cobra v1.9.1
+	github.com/things-go/go-socks5 v0.1.3
 	github.com/tmaxmax/go-sse v0.11.0
 	github.com/yosssi/gohtml v0.0.0-20201013000340-ee4748c638f4
 	golang.org/x/net v0.57.0
