@@ -50,6 +50,38 @@ func LoadOrCreate(dir string) (*Manager, error) {
 	return parse(data)
 }
 
+// Create writes a new local CA only when no imported or generated CA exists.
+func Create(dir string) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return err
+	}
+	data, err := generate()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "ca.pem")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("CA already exists at %s; move it away before creating another", path)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err = file.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
 func Import(dir, certPath, keyPath string) error {
 	certPEM, err := os.ReadFile(certPath)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/lihongjie0209/liujian/internal/capture"
 	"github.com/lihongjie0209/liujian/internal/dnsserver"
 	"github.com/lihongjie0209/liujian/internal/headless"
+	"github.com/lihongjie0209/liujian/internal/mock"
 	"github.com/lihongjie0209/liujian/internal/netutil"
 	"github.com/lihongjie0209/liujian/internal/scripts"
 	"github.com/lihongjie0209/liujian/internal/store"
@@ -62,7 +63,7 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 	var exclude, dnsAnswerRules, allowHostRaw, allowClientRaw []string
 	var httpExtraPorts, httpsExtraPorts []int
 	var noTUI, headlessMode bool
-	var outputFormat, bodyDir, captureLog, scriptConfig string
+	var outputFormat, bodyDir, captureLog, scriptConfig, mockConfig, filterText string
 	var inlineBodyBytes int
 	var dnsPort, httpPort, httpsPort, proxyPort int
 	var bodyMB, frameMB, diskMB int64
@@ -70,7 +71,11 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 		if outputFormat == "jsonline" {
 			outputFormat = "jsonl"
 		}
-		out := &headless.Output{Writer: cmd.OutOrStdout(), Format: outputFormat, BodyDir: bodyDir, InlineBytes: inlineBodyBytes}
+		filter, err := store.ParseFilter(filterText)
+		if err != nil {
+			return err
+		}
+		out := &headless.Output{Writer: cmd.OutOrStdout(), Format: outputFormat, BodyDir: bodyDir, InlineBytes: inlineBodyBytes, Filter: filter}
 		if err := out.Validate(); err != nil {
 			return err
 		}
@@ -154,6 +159,13 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 			return err
 		}
 		defer db.Close()
+		var mockRules *mock.Rules
+		if mockConfig != "" {
+			mockRules, err = mock.Load(mockConfig, db)
+			if err != nil {
+				return err
+			}
+		}
 		logOutput := os.Stderr
 		if !useHeadless {
 			logFile, err := os.OpenFile(filepath.Join(*dataDir, "ca-proxy.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -164,7 +176,7 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 			logOutput = logFile
 		}
 		logger := slog.New(slog.NewTextHandler(logOutput, nil))
-		server := &capture.Server{Config: capture.Config{ListenIP: ip, UpstreamDNS: upstream, Exclude: exclude, AllowHosts: allowHosts, AllowClients: allowClients, DNSAnswerRules: answerRules, DNSPort: dnsPort, HTTPPort: httpPort, HTTPSPort: httpsPort, HTTPExtraPorts: httpExtraPorts, HTTPSExtraPorts: httpsExtraPorts, ProxyPort: proxyPort, BodyLimit: bodyMB << 20, FrameLimit: frameMB << 20}, CA: manager, Store: db, Scripts: scriptRunner, Log: logger}
+		server := &capture.Server{Config: capture.Config{ListenIP: ip, UpstreamDNS: upstream, Exclude: exclude, AllowHosts: allowHosts, AllowClients: allowClients, DNSAnswerRules: answerRules, DNSPort: dnsPort, HTTPPort: httpPort, HTTPSPort: httpsPort, HTTPExtraPorts: httpExtraPorts, HTTPSExtraPorts: httpsExtraPorts, ProxyPort: proxyPort, BodyLimit: bodyMB << 20, FrameLimit: frameMB << 20}, CA: manager, Store: db, Scripts: scriptRunner, Mocks: mockRules, Log: logger}
 		var lastSession, lastMessage int64
 		var auditOut *headless.Output
 		if useHeadless || captureLog != "" {
@@ -182,7 +194,7 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 				return fmt.Errorf("open capture log: %w", err)
 			}
 			defer file.Close()
-			auditOut = &headless.Output{Writer: file, Format: "jsonl", BodyDir: out.BodyDir, InlineBytes: out.InlineBytes}
+			auditOut = &headless.Output{Writer: file, Format: "jsonl", BodyDir: out.BodyDir, InlineBytes: out.InlineBytes, Filter: filter}
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -252,6 +264,8 @@ func runCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Co
 	cmd.Flags().StringVar(&bodyDir, "body-dir", "", "directory for large headless bodies (default: DATA_DIR/bodies)")
 	cmd.Flags().StringVar(&captureLog, "capture-log", "", "write live sessions and messages as JSON Lines while TUI runs")
 	cmd.Flags().StringVar(&scriptConfig, "script-config", "", "JSON config for ordered request/response scripts")
+	cmd.Flags().StringVar(&mockConfig, "mock-config", "", "JSON rules for recorded or local-file responses")
+	cmd.Flags().StringVar(&filterText, "filter", "", "filter live JSONL/console and capture log using a shared expression")
 	cmd.Flags().IntVar(&dnsPort, "dns-port", 53, "DNS UDP/TCP port")
 	cmd.Flags().IntVar(&httpPort, "http-port", 80, "transparent HTTP port")
 	cmd.Flags().IntVar(&httpsPort, "https-port", 443, "transparent HTTPS port")
@@ -347,6 +361,16 @@ func streamNew(db *store.Store, out *headless.Output, lastSession, lastMessage *
 			return err
 		}
 		for _, message := range messages {
+			if out.Filter != nil {
+				parent, err := db.Get(message.SessionID)
+				if err != nil {
+					return err
+				}
+				if !out.Filter.Match(parent) {
+					*lastMessage = message.ID
+					continue
+				}
+			}
 			if err := out.WriteMessage(message); err != nil {
 				return err
 			}
@@ -360,6 +384,7 @@ func streamNew(db *store.Store, out *headless.Output, lastSession, lastMessage *
 
 func caCommand(dataDir *string, selectCA func() (*ca.Manager, error)) *cobra.Command {
 	root := &cobra.Command{Use: "ca", Short: "Manage the local signing CA"}
+	root.AddCommand(newCACreateCommand(dataDir), newCADiagnoseCommand(selectCA))
 	root.AddCommand(&cobra.Command{Use: "import CERT_PEM KEY_PEM", Args: cobra.ExactArgs(2), RunE: func(_ *cobra.Command, args []string) error { return ca.Import(*dataDir, args[0], args[1]) }})
 	root.AddCommand(&cobra.Command{Use: "export OUTPUT", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
 		manager, err := selectCA()
@@ -385,13 +410,21 @@ func sessionsCommand(dataDir *string) *cobra.Command {
 		defer db.Close()
 		return tui.Run(context.Background(), db, nil)
 	}}
-	root.AddCommand(&cobra.Command{Use: "export OUTPUT.har", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
+	var exportFilter string
+	exportCommand := &cobra.Command{Use: "export OUTPUT.har", Args: cobra.ExactArgs(1), RunE: func(_ *cobra.Command, args []string) error {
+		filter, err := store.ParseFilter(exportFilter)
+		if err != nil {
+			return err
+		}
 		db, err := store.Open(*dataDir, 0)
 		if err != nil {
 			return err
 		}
 		defer db.Close()
-		return db.ExportHAR(args[0])
-	}})
+		return db.ExportHARFiltered(args[0], filter)
+	}}
+	exportCommand.Flags().StringVar(&exportFilter, "filter", "", "export only sessions matching this expression")
+	root.AddCommand(exportCommand)
+	root.AddCommand(newReplayCommand(dataDir), newCurlCommand(dataDir))
 	return root
 }

@@ -110,6 +110,36 @@ func TestStreamNewEmitsSessionsAndLiveMessagesOnce(t *testing.T) {
 	}
 }
 
+func TestStreamNewAppliesFilterToSessionsAndMessages(t *testing.T) {
+	db, err := store.Open(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, name := range []string{"skip", "keep"} {
+		id, err := db.Save(&store.Session{Time: time.Now(), Method: "GET", URL: "https://example.test/" + name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AddMessage(id, store.Message{Time: time.Now(), Protocol: "websocket", Body: []byte(name)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	filter, err := store.ParseFilter("url:/keep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	out := &headless.Output{Writer: &output, Format: "jsonl", InlineBytes: 100, Filter: filter}
+	var lastSession, lastMessage int64
+	if err := streamNew(db, out, &lastSession, &lastMessage); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "skip") || !strings.Contains(output.String(), "/keep") || !strings.Contains(output.String(), `"body"`) {
+		t.Fatalf("filtered stream: %s", output.String())
+	}
+}
+
 func TestRunDefaultsToAllIPv4Interfaces(t *testing.T) {
 	cmd := rootCommand()
 	run, _, err := cmd.Find([]string{"run"})

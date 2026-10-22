@@ -1,0 +1,13 @@
+{
+  "rules": [
+    {
+      "method": "GET",
+      "url_regex": "^https://api\\.example\\.com/config$",
+      "file": "mock-response.json",
+      "status": 200,
+      "headers": {
+        "Content-Type": ["application/json; charset=utf-8"]
+      }
+    }
+  ]
+}

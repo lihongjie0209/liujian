@@ -25,6 +25,7 @@ import (
 	"github.com/lihongjie0209/liujian/internal/allowlist"
 	"github.com/lihongjie0209/liujian/internal/ca"
 	"github.com/lihongjie0209/liujian/internal/dnsserver"
+	"github.com/lihongjie0209/liujian/internal/mock"
 	"github.com/lihongjie0209/liujian/internal/netutil"
 	"github.com/lihongjie0209/liujian/internal/scripts"
 	"github.com/lihongjie0209/liujian/internal/store"
@@ -51,6 +52,7 @@ type Server struct {
 	CA          *ca.Manager
 	Store       *store.Store
 	Scripts     *scripts.Runner
+	Mocks       *mock.Rules
 	Log         *slog.Logger
 	transport   *http.Transport
 	tlsFailures atomic.Uint64
@@ -662,7 +664,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request, scheme, host 
 		return id, writer, done
 	}
 	var proxyErr string
-	proxy := &httputil.ReverseProxy{Transport: s.transport, Rewrite: func(in *httputil.ProxyRequest) { in.SetURL(target); in.Out.Host = host }, ModifyResponse: func(resp *http.Response) error {
+	var transport http.RoundTripper = s.transport
+	if s.Mocks != nil {
+		transport = mock.Transport{Rules: s.Mocks, Base: s.transport}
+	}
+	proxy := &httputil.ReverseProxy{Transport: transport, Rewrite: func(in *httputil.ProxyRequest) { in.SetURL(target); in.Out.Host = host }, ModifyResponse: func(resp *http.Response) error {
 		if s.Scripts == nil || strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			return nil
 		}

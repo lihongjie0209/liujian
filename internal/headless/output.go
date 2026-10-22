@@ -19,6 +19,7 @@ type Output struct {
 	Format      string
 	BodyDir     string
 	InlineBytes int
+	Filter      *store.Filter
 }
 
 type Body struct {
@@ -69,6 +70,9 @@ func (o *Output) Validate() error {
 }
 
 func (o *Output) WriteSession(v *store.Session) error {
+	if !o.Filter.Match(v) {
+		return nil
+	}
 	req, err := o.body(v.RequestBody, v.RequestTruncated, fmt.Sprintf("session-%d-request", v.ID))
 	if err != nil {
 		return err

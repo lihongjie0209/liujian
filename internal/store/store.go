@@ -253,7 +253,7 @@ func scriptDisplay(runs []ScriptRun, phase string) []byte {
 }
 
 func bodySearchSQL(prefix string) string {
-	return "(instr(lower(CAST(" + prefix + "_headers AS TEXT)),lower(?))>0 OR instr(lower(CAST(" + prefix + "_body AS TEXT)),lower(?))>0 OR instr(lower(CAST(" + prefix + "_search AS TEXT)),lower(?))>0 OR instr(lower(CAST(" + prefix + "_display AS TEXT)),lower(?))>0)"
+	return "(instr(lower(COALESCE(CAST(" + prefix + "_headers AS TEXT),'')),lower(?))>0 OR instr(lower(COALESCE(CAST(" + prefix + "_body AS TEXT),'')),lower(?))>0 OR instr(lower(COALESCE(CAST(" + prefix + "_search AS TEXT),'')),lower(?))>0 OR instr(lower(COALESCE(CAST(" + prefix + "_display AS TEXT),'')),lower(?))>0)"
 }
 
 func bodySearchArgs(term string) []any { return []any{term, term, term, term} }
@@ -441,6 +441,24 @@ func (s *Store) ListQuery(limit int, filter Query) ([]Session, error) {
 	}
 	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, limit)
+	return s.listSummaries(q, args...)
+}
+
+func (s *Store) ListFiltered(limit int, filter *Filter) ([]Session, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	q := "SELECT id,ts,COALESCE(method,''),COALESCE(url,''),COALESCE(proto,''),COALESCE(status,0),COALESCE(error,''),client_addr,error_count,duration_ns,resp_headers,COALESCE(length(resp_body),0),COALESCE(resp_truncated,0),kind FROM sessions"
+	condition, args := filter.SQL()
+	if condition != "" {
+		q += " WHERE " + condition
+	}
+	q += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+	return s.listSummaries(q, args...)
+}
+
+func (s *Store) listSummaries(q string, args ...any) ([]Session, error) {
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -548,7 +566,17 @@ func (s *Store) Get(id int64) (*Session, error) {
 }
 
 func (s *Store) ExportHAR(path string) error {
-	rows, err := s.db.Query("SELECT id FROM sessions ORDER BY id")
+	return s.ExportHARFiltered(path, nil)
+}
+
+func (s *Store) ExportHARFiltered(path string, filter *Filter) error {
+	condition, args := filter.SQL()
+	query := "SELECT id FROM sessions"
+	if condition != "" {
+		query += " WHERE " + condition
+	}
+	query += " ORDER BY id"
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return err
 	}

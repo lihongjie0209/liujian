@@ -299,9 +299,12 @@ func (m model) detailView() string {
 	available := max(1, m.height-7)
 	start := min(max(0, m.detailScroll), max(0, len(lines)-available))
 	end := min(len(lines), start+available)
-	footer := "\n" + rule(width) + "\nTab/←→ tabs  ↑↓ scroll  Esc back  q quit"
+	footer := "\n" + rule(width) + "\nTab/←→ tabs  ↑↓ scroll  r replay  c copy curl  Esc back  q quit"
 	if m.currentTab() == "Messages" && !m.eventDetail {
-		footer = "\n" + rule(width) + "\n↑↓ select message  Enter details  Esc back  q quit"
+		footer = "\n" + rule(width) + "\n↑↓ select message  Enter details  r replay  c copy curl  Esc back  q quit"
+	}
+	if m.notice != "" {
+		footer += "\n" + clip(safe(m.notice), width)
 	}
 	return header.String() + strings.Join(lines[start:end], "\n") + footer
 }

@@ -7,14 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/lihongjie0209/liujian/internal/firewall"
-	"github.com/lihongjie0209/liujian/internal/store"
 	"github.com/alecthomas/chroma/v2/quick"
+	"github.com/aymanbagabas/go-osc52/v2"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/lihongjie0209/liujian/internal/firewall"
+	"github.com/lihongjie0209/liujian/internal/replay"
+	"github.com/lihongjie0209/liujian/internal/store"
 	"github.com/yosssi/gohtml"
 )
 
@@ -31,6 +34,9 @@ type model struct {
 	eventIndex    int
 	eventDetail   bool
 	item          *store.Session
+	ctx           context.Context
+	notice        string
+	replaying     bool
 	width, height int
 	errorText     string
 	live          bool
@@ -54,7 +60,7 @@ type Listeners struct {
 }
 
 func Run(ctx context.Context, s *store.Store, listeners *Listeners) error {
-	m := model{store: s, live: listeners != nil, width: 100, height: 30}
+	m := model{store: s, ctx: ctx, live: listeners != nil, width: 100, height: 30}
 	if listeners != nil {
 		m.listeners = *listeners
 	}
@@ -81,9 +87,12 @@ var kindFilters = []struct{ label, kind string }{
 }
 
 func (m *model) refreshRows() {
-	query := parseFilter(m.filter)
-	query.Kind = kindFilters[m.selectedKind].kind
-	rows, err := m.store.ListQuery(500, query)
+	filter, err := store.ParseFilter(m.filter)
+	if err != nil {
+		m.errorText = err.Error()
+		return
+	}
+	rows, err := m.store.ListFiltered(500, filter.WithKind(kindFilters[m.selectedKind].kind))
 	if err != nil {
 		m.errorText = err.Error()
 		return
@@ -100,6 +109,12 @@ func (m *model) refreshRows() {
 
 type firewallTickMsg struct{}
 type firewallResultMsg struct{ status firewall.Status }
+type replayResultMsg struct {
+	id     int64
+	status int
+	err    error
+}
+type copyResultMsg struct{ err error }
 
 func tick() tea.Cmd { return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} }) }
 
@@ -134,6 +149,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(checkFirewall(), firewallTick())
 	case firewallResultMsg:
 		m.firewall = &v.status
+	case replayResultMsg:
+		m.replaying = false
+		if v.err != nil {
+			m.notice = "Replay failed: " + v.err.Error()
+		} else {
+			m.notice = fmt.Sprintf("Replayed as session %d (HTTP %d)", v.id, v.status)
+			m.refreshRows()
+		}
+	case copyResultMsg:
+		if v.err != nil {
+			m.notice = "Copy curl failed: " + v.err.Error()
+		} else {
+			m.notice = "Sent curl command to terminal clipboard (OSC52)"
+		}
 	case tea.KeyMsg:
 		if m.editing {
 			switch v.String() {
@@ -201,6 +230,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.detail = false
 			}
+		case "r":
+			if m.detail && m.item != nil && !m.replaying {
+				id := m.item.ID
+				db := m.store
+				ctx := m.ctx
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				m.replaying = true
+				m.notice = "Replaying request..."
+				return m, func() tea.Msg {
+					result, err := replay.Send(ctx, db, id, 30*time.Second)
+					if err != nil {
+						return replayResultMsg{err: err}
+					}
+					return replayResultMsg{id: result.ID, status: result.Status}
+				}
+			}
+		case "c":
+			if m.detail && m.item != nil {
+				line, err := replay.Curl(m.item)
+				if err != nil {
+					m.notice = "Copy curl failed: " + err.Error()
+					return m, nil
+				}
+				return m, func() tea.Msg {
+					_, err := fmt.Fprint(os.Stderr, osc52.New(line))
+					return copyResultMsg{err: err}
+				}
+			}
 		case "up", "k":
 			if m.detail && m.currentTab() == "Messages" && !m.eventDetail {
 				if m.eventIndex > 0 {
@@ -256,38 +315,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
-}
-
-func parseFilter(input string) store.Query {
-	var query store.Query
-	var text []string
-	for _, field := range strings.Fields(input) {
-		key, value, found := strings.Cut(field, ":")
-		if !found || value == "" {
-			text = append(text, field)
-			continue
-		}
-		switch strings.ToLower(key) {
-		case "url":
-			query.URL = value
-		case "proto", "protocol":
-			query.Protocol = value
-		case "method":
-			query.Method = value
-		case "status":
-			query.Status = value
-		case "client", "ip":
-			query.Client = value
-		case "req", "request":
-			query.Request = value
-		case "resp", "response":
-			query.Response = value
-		default:
-			text = append(text, field)
-		}
-	}
-	query.Text = strings.Join(text, " ")
-	return query
 }
 
 func eventLabel(msg store.Message) string {

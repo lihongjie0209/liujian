@@ -2,15 +2,49 @@ package tui
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lihongjie0209/liujian/internal/firewall"
 	"github.com/lihongjie0209/liujian/internal/store"
-	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestTUIReplayCreatesNewSession(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("replayed"))
+	}))
+	defer upstream.Close()
+	db, err := store.Open(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Save(&store.Session{Time: time.Now(), Method: "GET", URL: upstream.URL + "/api", Status: 200}); err != nil {
+		t.Fatal(err)
+	}
+	m := model{store: db, width: 100, height: 30}
+	m.refreshRows()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, action := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if action == nil {
+		t.Fatal("replay key returned no command")
+	}
+	m = updated.(model)
+	updated, _ = m.Update(action())
+	m = updated.(model)
+	if !strings.Contains(m.notice, "Replayed as session") {
+		t.Fatalf("TUI replay notice: %s", m.notice)
+	}
+	rows, err := db.List(10, "")
+	if err != nil || len(rows) != 2 || rows[0].ClientAddr != "replay:1" {
+		t.Fatalf("replay session: %+v, %v", rows, err)
+	}
+}
 
 func TestModelBrowseFilterAndDetails(t *testing.T) {
 	db, err := store.Open(t.TempDir(), 0)
@@ -215,9 +249,9 @@ func TestListenerGuide(t *testing.T) {
 }
 
 func TestParseFilterFields(t *testing.T) {
-	query := parseFilter("url:/api proto:https method:POST status:201 client:192.168.1.8 error")
-	if query.URL != "/api" || query.Protocol != "https" || query.Method != "POST" || query.Status != "201" || query.Client != "192.168.1.8" || query.Text != "error" {
-		t.Fatalf("parsed filter = %+v", query)
+	filter, err := store.ParseFilter("url:/api proto:https method:POST status:201 client:192.168.1.8 error")
+	if err != nil || !filter.Match(&store.Session{URL: "https://test/api", Method: "POST", Status: 201, ClientAddr: "192.168.1.8:1000", Error: "error"}) {
+		t.Fatalf("parsed filter did not match: %v", err)
 	}
 	guide := model{live: true, listeners: Listeners{IP: "0.0.0.0", DNSPort: 53, AllowHosts: []string{"*.example.test"}, AllowClients: []string{"192.168.1.8"}}, width: 120, height: 30}.View()
 	if !strings.Contains(guide, "Capture targets") || !strings.Contains(guide, "Capture clients") {

@@ -76,6 +76,15 @@ go build -o liujian ./cmd/liujian
 
 导入的 CA 默认保存在 `~/.local/share/ca-proxy/ca.pem`（沿用旧版数据目录，以保留已有证书和会话），并优先于内置默认 CA；显式传入 `--ca-profile` 时则使用指定的内置 CA。要清除本地 CA 覆盖，可移走该 `ca.pem`。会话默认保存在同一数据目录；可用 `--data-dir` 更改。上游 HTTPS 证书会正常校验。
 
+也可以生成一组新的本地 CA，再将导出的证书安装到测试设备。`ca create` 遇到现有 `ca.pem` 会拒绝覆盖；生成后重启抓包进程。`ca diagnose` 显示当前 CA、为目标签发的证书，以及目标上游的证书链与系统信任结果；它无法判断客户端的证书绑定或吊销检查。
+
+```sh
+./liujian ca create
+./liujian ca export ./ca.crt
+./liujian ca diagnose api.example.com
+./liujian ca diagnose api.example.com --connect-to 192.0.2.10:443
+```
+
 ## 智能代理端口
 
 `--proxy-port` 默认是 `8080`，同一端口会自动识别 HTTP 代理与 SOCKS5，无须分别配置。可直接把浏览器或系统代理设置为 `抓包机IP:8080`，协议选择 HTTP 或 SOCKS5；SOCKS5 使用免认证模式，并允许局域网或本机客户端连接。当前支持 SOCKS5 TCP CONNECT；BIND 与 UDP ASSOCIATE 返回不支持。
@@ -92,11 +101,22 @@ curl --proxy socks5h://127.0.0.1:8080 http://example.com/
 
 实时 TUI 顶部显示当前 DNS、HTTP、HTTPS、HTTP/SOCKS5 智能代理监听端口，以及手机 DNS 和 CA 证书安装指引。默认监听所有 IPv4 网卡时，顶部会列出可供手机使用的局域网地址及 DNS 响应规则。启动时会检查防火墙状态，此后每 15 秒刷新一次；Windows 下检查当前程序的入站允许或阻止规则，未找到允许规则时提示手机访问尚未验证。此检查不能代替从手机实际连接测试。TLS 握手失败会显示为列表中的失败记录，Enter 可查看 SNI、客户端地址、错误原因和合并次数；同一错误每 10 秒最多新增一行，顶部也有总次数，不会逐条刷屏。其他服务错误写入数据目录下的 `ca-proxy.log`。手机常规 DNS 设置使用 53 端口；如果启动参数为其他 DNS 端口，TUI 会提示改为 `--dns-port 53`。监听地址为本机回环地址时，也会提示改用局域网 IPv4 地址。
 
-列表按 Chrome Network 风格展示 Name、Status、Type、Initiator、Size、Time、Waterfall；状态码按成功、跳转、失败着色。左右方向键切换 All、Fetch/XHR、Doc、CSS、JS、Img、Media、Font、WS、SSE、Manifest、Wasm、TLS、Other 类型，`0` 返回 All。上下方向键选择请求，Enter 打开详情。详情中用 Tab 切换 Headers、Payload、Preview、Response、Cookies、Timing；SSE/WS 请求还有 Messages 标签，可以选中消息并按 Enter 查看正文；执行过脚本的会话还有 Scripts 标签，显示每个脚本的格式化输出、控制台日志与错误。JSON/HTML 会格式化并高亮。Esc 返回上一级；列表中按 `/` 输入筛选条件，多项条件用空格连接，例如 `url:/api proto:https method:GET status:200 client:192.168.1.50 resp:token`。`req:` 和 `resp:` 分别搜索请求和响应的 URL/状态、头、正文；普通文本搜索这些内容及错误。gzip 压缩正文也会解压后索引；其他未知压缩格式和加密正文需要脚本先转换成可读文本。`proto:` 支持 `http`、`https`、`ws`、`wss`、`websocket`、`sse`、`h2`、`http1`。PageUp/PageDown 滚动详情，`q` 退出。退出后可重新打开历史或导出：
+列表按 Chrome Network 风格展示 Name、Status、Type、Initiator、Size、Time、Waterfall；状态码按成功、跳转、失败着色。左右方向键切换 All、Fetch/XHR、Doc、CSS、JS、Img、Media、Font、WS、SSE、Manifest、Wasm、TLS、Other 类型，`0` 返回 All。上下方向键选择请求，Enter 打开详情。详情中用 Tab 切换 Headers、Payload、Preview、Response、Cookies、Timing；SSE/WS 请求还有 Messages 标签，可以选中消息并按 Enter 查看正文；执行过脚本的会话还有 Scripts 标签，显示每个脚本的格式化输出、控制台日志与错误。JSON/HTML 会格式化并高亮。Esc 返回上一级；列表中按 `/` 输入筛选条件，多项条件用空格连接，例如 `url:/api proto:https method:GET status:200 client:192.168.1.50 resp:token`。多个条件默认是 AND，也支持 `&`、`|`、`!`、括号及引号，例如 `(method:POST | status:5xx) & !url:/health`。`req:` 和 `resp:` 分别搜索请求和响应的 URL/状态、头、正文；普通文本搜索这些内容及错误。gzip 压缩正文也会解压后索引；其他未知压缩格式和加密正文需要脚本先转换成可读文本。`proto:` 支持 `http`、`https`、`ws`、`wss`、`websocket`、`sse`、`h2`、`http1`。在详情按 `r` 重放当前 HTTP 请求，按 `c` 使用 OSC 52 复制 cURL 命令（取决于终端剪贴板支持）。PageUp/PageDown 滚动详情，`q` 退出。退出后可重新打开历史或导出：
 
 ```sh
 ./liujian sessions
 ./liujian sessions export ./capture.har
+./liujian sessions export ./errors.har --filter 'status:5xx | error:tls'
+./liujian sessions replay 123
+./liujian sessions curl 123
+```
+
+重放会直连目标上游，保留原方法、头和已保存的请求正文，并把新响应存成一条会话；不会自动跟随重定向。请求正文已截断或 WebSocket 握手会话不能重放。导出的 cURL 命令适用于 POSIX shell；含正文时使用 `xxd` 传递二进制数据。
+
+通过 `--mock-config` 可按顺序匹配并替换响应：使用已保存的会话响应，或从本地文件读取正文。匹配不到的请求正常发往上游。配置在启动时读取，改动后需要重启；文件路径相对配置文件定位。模拟响应也会写入会话。示例配置见 [examples/mocks.json](examples/mocks.json)。
+
+```sh
+./liujian run --mock-config ./examples/mocks.json
 ```
 
 无头模式可输出方便脚本和 AI 逐行读取的 JSON Lines；每个 HTTP/TLS 会话以及每条 WebSocket/SSE 消息各占一行。诊断信息写入 stderr，标准输出只包含数据。`--no-tui` 是 `--headless` 的兼容别名：
@@ -106,6 +126,7 @@ curl --proxy socks5h://127.0.0.1:8080 http://example.com/
 ./liujian run --headless --output console
 ./liujian run --headless --output jsonl --inline-body-bytes 1024 --body-dir ./capture-bodies
 ./liujian run --capture-log ./capture.jsonl  # 同时显示 TUI 并记录 JSONL
+./liujian run --headless --output jsonl --filter '(method:POST | status:5xx) & !url:/health'
 ```
 
 正文超过 `--inline-body-bytes`（默认 4096 字节）时，输出中用绝对 `path` 指向单独的 `.body` 文件；较小的文本正文直接写入 `text`，二进制正文用 `base64`。正文文件仅当前用户可读。每个请求/响应正文默认最多保存 10 MiB，每条 WebSocket 或 SSE 消息默认最多保存 1 MiB，可用 `--body-mb` 和 `--frame-mb` 调整；超过上限的内容会标记为 `truncated`。SSE 和 WebSocket 消息在连接保持打开时也会持续输出。默认保留约 1 GiB 的 SQLite 会话数据，可用 `--disk-mb` 调整；单独导出的正文文件不计入此限制，需要自行清理。HAR 中 WebSocket 消息和 SSE 事件分别位于自定义 `_webSocketMessages`、`_sseEvents` 字段；总耗时有记录，阶段耗时为近似值。
@@ -167,7 +188,7 @@ go test -tags integration ./cmd/liujian -run TestCLIProxyTUIAndHAR
 
 ## 抓包范围
 
-DNS 模式默认把域名解析到抓包机，仅对配置的 HTTP/HTTPS 端口提供服务。其他端口的连接可能失败，可用 `--exclude` 将域名交回上游 DNS。直连 IP、应用内 DoH/DoT、HTTP/3/QUIC、证书绑定及不信任用户 CA 的应用无法保证解密。当前不提供重放、网关或 VPN 模式。
+DNS 模式默认把域名解析到抓包机，仅对配置的 HTTP/HTTPS 端口提供服务。其他端口的连接可能失败，可用 `--exclude` 将域名交回上游 DNS。直连 IP、应用内 DoH/DoT、HTTP/3/QUIC、证书绑定及不信任用户 CA 的应用无法保证解密。当前不提供网关或 VPN 模式。
 
 协议实现参考了 [go-mitmproxy](https://github.com/lqqyt2423/go-mitmproxy) 的设计；本项目代码按自己的 CLI、DNS、代理、证书、存储和 TUI 模块组织，没有直接复制其源码。
 
